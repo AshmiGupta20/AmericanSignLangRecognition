@@ -29,7 +29,8 @@ acc = accuracy_score(y_test, preds)
 print(f"\nAccuracy: {acc:.4f}")
 print("\nClassification Report:\n", classification_report(y_test, preds))
 
-joblib.dump(model, MODEL_PATH)
+joblib.dump(mod
+            el, MODEL_PATH)
 print(f"\nModel saved to {MODEL_PATH}")
 
 # Confusion matrix plot (great for your report)
