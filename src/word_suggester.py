@@ -1,27 +1,56 @@
+from collections import Counter
+
+CORPUS_PATH = "data/corpus.txt"
 WORD_LIST_PATH = "data/word_list.txt"
 
-def load_word_list():
-    with open(WORD_LIST_PATH, "r") as f:
-        words = [line.strip().upper() for line in f if line.strip()]
-    return words  # already ordered by frequency (most common first)
+unigrams, bigrams = Counter(), Counter()
 
-WORDS = load_word_list()
+# Train the language model on the crawled corpus
+try:
+    with open(CORPUS_PATH, encoding="utf-8") as f:
+        for line in f:
+            words = line.split()
+            unigrams.update(words)
+            bigrams.update(zip(words, words[1:]))
+except FileNotFoundError:
+    print("Warning: data/corpus.txt not found. Run crawl_corpus.py first.")
 
-def suggest_words(prefix, top_n=3):
-    """
-    Rank candidate words by:
-    1. Starts with the prefix
-    2. Position in the frequency-ordered word list (earlier = more common = ranked higher)
-    """
-    prefix = prefix.upper()
+# Base vocabulary so common conversational words always exist
+with open(WORD_LIST_PATH) as f:
+    for line in f:
+        w = line.strip().lower()
+        if w:
+            unigrams[w] += 5
+
+TOTAL = sum(unigrams.values())
+V = len(unigrams)
+
+
+def p_unigram(w):
+    return (unigrams[w] + 1) / (TOTAL + V)                  # add-one (Laplace) smoothing
+
+
+def p_bigram(w, prev):
+    return (bigrams[(prev, w)] + 1) / (unigrams[prev] + V)  # P(w | prev), smoothed
+
+
+def suggest_words(prefix, prev_word=None, top_n=3, lam=0.7):
+    """Rank words starting with `prefix` by interpolated bigram/unigram probability."""
+    prefix = prefix.lower()
     if not prefix:
         return []
+    candidates = [w for w in unigrams if w.startswith(prefix)]
 
-    matches = [w for w in WORDS if w.startswith(prefix)]
-    return matches[:top_n]
+    def score(w):
+        s = p_unigram(w)
+        if prev_word:
+            s = lam * p_bigram(w, prev_word.lower()) + (1 - lam) * s
+        return s
+
+    return [w.upper() for w in sorted(candidates, key=score, reverse=True)[:top_n]]
+
 
 if __name__ == "__main__":
-    # quick manual test
-    test_prefix = input("Enter a prefix to test suggestions: ")
-    results = suggest_words(test_prefix)
-    print("Suggestions:", results)
+    prefix = input("Prefix: ")
+    prev = input("Previous word (optional): ").strip() or None
+    print("Suggestions:", suggest_words(prefix, prev))
