@@ -1,44 +1,52 @@
-import pandas as pd
+import os
 import numpy as np
+import pandas as pd
+import joblib
+import torch
+import torch.nn as nn
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import joblib
-import os
+from nn_models import AutoEncoder
 
 DATA_PATH = "data/landmarks/landmark_data.csv"
-MODEL_PATH = "models/autoencoder_pca.pkl"
-SCALER_PATH = "models/autoencoder_scaler.pkl"
-THRESHOLD_PATH = "models/autoencoder_threshold.pkl"
 os.makedirs("models", exist_ok=True)
 
 df = pd.read_csv(DATA_PATH)
-X = df.drop("label", axis=1).values
+X = df.drop("label", axis=1).values.astype(np.float32)
 
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+Xs = scaler.fit_transform(X).astype(np.float32)
+Xtr, Xte = train_test_split(Xs, test_size=0.2, random_state=42)
+Xtr, Xte = torch.tensor(Xtr), torch.tensor(Xte)
 
-X_train, X_test = train_test_split(X_scaled, test_size=0.2, random_state=42)
+torch.manual_seed(42)
+model = AutoEncoder(Xtr.shape[1])
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss_fn = nn.MSELoss()
 
-# PCA acts as a linear autoencoder: compress to n_components, then reconstruct.
-# Fewer components = more compression = stricter "normal pose" definition.
-n_components = 16
-pca = PCA(n_components=n_components, random_state=42)
-pca.fit(X_train)
+for epoch in range(60):
+    model.train()
+    perm = torch.randperm(len(Xtr))
+    for i in range(0, len(Xtr), 64):
+        batch = Xtr[perm[i:i + 64]]
+        noisy = batch + 0.1 * torch.randn_like(batch)      # denoising: corrupt input, reconstruct clean
+        opt.zero_grad()
+        loss = loss_fn(model(noisy), batch)
+        loss.backward()
+        opt.step()
+    if (epoch + 1) % 10 == 0:
+        model.eval()
+        with torch.no_grad():
+            val = loss_fn(model(Xte), Xte).item()
+        print(f"Epoch {epoch + 1}/60  val loss: {val:.5f}")
 
-# Reconstruct test data and measure error, same idea as a neural autoencoder
-X_test_compressed = pca.transform(X_test)
-X_test_reconstructed = pca.inverse_transform(X_test_compressed)
-errors = np.mean(np.square(X_test - X_test_reconstructed), axis=1)
+model.eval()
+with torch.no_grad():
+    errors = torch.mean((model(Xte) - Xte) ** 2, dim=1).numpy()
+threshold = float(np.percentile(errors, 95) * 1.2)
+print(f"Reconstruction error threshold: {threshold:.5f}")
 
-threshold = np.percentile(errors, 95) * 1.2
-print(f"Reconstruction error threshold set to: {threshold:.5f}")
-print(f"Explained variance with {n_components} components: {pca.explained_variance_ratio_.sum():.4f}")
-
-joblib.dump(pca, MODEL_PATH)
-joblib.dump(scaler, SCALER_PATH)
-joblib.dump(threshold, THRESHOLD_PATH)
-
-print(f"PCA autoencoder saved to {MODEL_PATH}")
-print(f"Scaler saved to {SCALER_PATH}")
-print(f"Threshold saved to {THRESHOLD_PATH}")
+torch.save(model.state_dict(), "models/autoencoder.pt")
+joblib.dump(scaler, "models/autoencoder_scaler.pkl")
+joblib.dump(threshold, "models/autoencoder_threshold.pkl")
+print("Saved autoencoder, scaler and threshold.")
